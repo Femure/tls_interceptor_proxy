@@ -1,0 +1,13 @@
+[package]
+name = "tls_interceptor_proxy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+argh = "0.1.12"
+hyper = "^0.14.3"
+third-wheel = "0.6.0"
+tokio = "1.40.0"
+har = "0.8.0"
+cookie = "0.18.1"
+time = "0.3.36"
