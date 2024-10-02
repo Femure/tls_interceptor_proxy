@@ -1,8 +1,11 @@
--Mise en place du proxy TLS interceptor
--Log les entrées pour un temps donnée
+Fait:
+- Mise en place du proxy TLS interceptor
+- Mise en place de logs en continue
+- Réussir à bloquer une rêquete
+- Renvoyer une réponse à au client pour un condition donnée (ici par rapport au nom de domain)
+- Filtrer les requêtes pour ne garder qu'un domain visé ex:chatgpt.com
 
 A faire: 
-- Changer l'enregistrement des données
-- Filtrer les requêtes pour ne garder que chatgpt
 - Corriger le pb de UTF-8
-- Réussir à logger pour une condition voulue
+- Viser seulement les requêtes POST
+- Réussir à extraire les données de la requête pour ensuite les envoyer en analyse
