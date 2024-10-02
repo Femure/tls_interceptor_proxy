@@ -1,12 +1,11 @@
+use hyper::header::HOST;
 use hyper::service::Service;
 use hyper::{Body, Request, Response};
 use std::fs::File;
 use std::io::prelude::*;
-use std::time::Duration;
 use time::format_description;
+use tokio::join;
 use tokio::sync::mpsc;
-use tokio::time::timeout;
-use tokio::time::sleep;
 
 use argh::FromArgs;
 use cookie::Cookie;
@@ -23,12 +22,8 @@ struct StartMitm {
     port: u16,
 
     /// output file to save the HAR to
-    #[argh(option, short = 'o', default = "\"third-wheel.har\".to_string()")]
+    #[argh(option, short = 'o', default = "\"logs.har\".to_string()")]
     outfile: String,
-
-    /// number of seconds to run the proxy for
-    #[argh(option, short = 's', default = "20")]
-    seconds_to_run_for: u64,
 
     /// pem file for self-signed certificate authority certificate
     #[argh(option, short = 'c', default = "\"ca/ca_certs/cert.pem\".to_string()")]
@@ -223,25 +218,48 @@ async fn main() -> Result<(), Error> {
     let make_har_sender = mitm_layer(move |req: Request<Body>, mut third_wheel: ThirdWheel| {
         let sender = sender.clone();
         let fut = async move {
+            // Intercept the request parts and body
             let (req_parts, req_body) = req.into_parts();
-
             let body_bytes = hyper::body::to_bytes(req_body).await.unwrap().to_vec();
             let mut copied_bytes = Vec::with_capacity(body_bytes.len());
             copied_bytes.extend(&body_bytes);
             let har_request = copy_from_http_request_to_har(&req_parts, copied_bytes).await;
 
-            let body = Body::from(hyper::body::Bytes::from(body_bytes));
-            let req = Request::<Body>::from_parts(req_parts, body);
+            let host = req_parts
+                .headers
+                .get(HOST)
+                .map(|h| h.to_str().unwrap_or(""))
+                .unwrap();
+            println!("{}", host);
 
-            let response = third_wheel.call(req).await.unwrap();
+            let response;
+            if host.contains("chatgpt.com") {
+                println!("Blocked");
+                // If the request matches the condition to be blocked, return a custom response
+                response = Response::builder()
+                    .status(403)
+                    .header("Content-Type", "text/plain")
+                    .body(Body::from("Blocked by proxy"))
+                    .unwrap();
+            } else {
+                println!("Ok");
+                // If the request is not blocked, proceed with forwarding it
+                let body = Body::from(hyper::body::Bytes::from(body_bytes));
+                let req = Request::<Body>::from_parts(req_parts, body);
 
+                // Forward the request to the actual server
+                response = third_wheel.call(req).await.unwrap();
+            }
+
+            // Process the response and send it back
             let (res_parts, res_body) = response.into_parts();
+
             let body_bytes: Vec<u8> = hyper::body::to_bytes(res_body).await.unwrap().to_vec();
             let mut copied_bytes = Vec::with_capacity(body_bytes.len());
             copied_bytes.extend(&body_bytes);
             let har_response = copy_from_http_response_to_har(&res_parts, copied_bytes).await;
 
-            let body = Body::from(hyper::body::Bytes::from(body_bytes));
+            let body: Body = Body::from(hyper::body::Bytes::from(body_bytes));
             let response = Response::<Body>::from_parts(res_parts, body);
 
             let entries = Entries {
@@ -269,70 +287,61 @@ async fn main() -> Result<(), Error> {
                 pageref: None,
             };
             sender.send(entries).await.unwrap();
+
             Ok(response)
         };
         Box::pin(fut)
     });
+
     let mitm_proxy = MitmProxy::builder(make_har_sender, ca).build();
     let addr = format!("127.0.0.1:{}", args.port).parse().unwrap();
     let (_, mitm_proxy) = mitm_proxy.bind(addr);
 
-    // Start the proxy and set a timeout for its execution
-    let timeout_duration = Duration::from_secs(args.seconds_to_run_for);
-    let result = timeout(timeout_duration, mitm_proxy).await;
-
-    // Handle the result of the timeout
-    match result {
-        Ok(_) => {
-            println!(
-                "Proxy ran successfully for {} seconds.",
-                args.seconds_to_run_for
-            );
-        }
-        Err(_) => {
-            println!("Timeout reached. Shutting down the proxy.");
-            // Here you can add any additional cleanup if necessary
-        }
-    }
+    // Exécution du proxy
+    let proxy_task = tokio::spawn(async {
+        mitm_proxy.await.unwrap();
+        println!("Proxy is running");
+    });
 
     let mut entries = Vec::new();
-    loop {
-        tokio::select! {
-            Some(entry) = receiver.recv() => {
-                entries.push(entry.clone());
-                println!("Received entry: {:?}", entry);
-            }
-            _ = tokio::time::sleep(timeout_duration) => {
-                println!("Timeout reached while waiting for entries.");
-                break; // Exit the loop after timeout
-            }
+
+    // Open a file and write entries to it
+    let mut file = File::create(&args.outfile).unwrap();
+    // Lecture et affichage des entrées au fur et à mesure
+    let receiver_task = tokio::spawn(async move {
+        while let Some(entry) = receiver.recv().await {
+            // On affiche et stocke les entrées
+            entries.push(entry.clone());
+
+            let out = har::Har {
+                log: har::Spec::V1_2(v1_2::Log {
+                    entries: entries.clone(),
+                    browser: None,
+                    comment: None,
+                    pages: None,
+                    creator: v1_2::Creator {
+                        name: "third-wheel".to_string(),
+                        version: "0.5".to_string(),
+                        comment: None,
+                    },
+                }),
+            };
+
+            file.write_all(har::to_json(&out).unwrap().as_bytes()).unwrap();
         }
+    });
+
+    // On attend que les deux tâches se terminent (ceci arrive si l'une échoue ou si le proxy est arrêté)
+    let (proxy_result, receiver_result) = join!(proxy_task, receiver_task);
+
+    // Gestion des erreurs éventuelles
+    if let Err(e) = proxy_result {
+        eprintln!("Error in proxy task: {:?}", e); // Log the error
     }
 
-    let out = har::Har {
-        log: har::Spec::V1_2(v1_2::Log {
-            entries,
-            browser: None,
-            comment: None,
-            pages: None,
-            creator: v1_2::Creator {
-                name: "third-wheel".to_string(),
-                version: "0.5".to_string(),
-                comment: None,
-            },
-        }),
-    };
-    
-
-    // Handle the case where file creation or writing fails
-    match File::create(args.outfile) {
-        Ok(mut file) => {
-            match file.write_all(har::to_json(&out).unwrap().as_bytes()) {
-                Ok(_) => println!("HAR file written successfully."),
-                Err(e) => eprintln!("Error writing HAR file: {}", e),
-            }
-        },
-        Err(e) => eprintln!("Error creating HAR file: {}", e),
+    if let Err(e) = receiver_result {
+        eprintln!("Error in receiver task: {:?}", e); // Log the error
     }
+
     Ok(())
 }
