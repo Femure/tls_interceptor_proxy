@@ -10,4 +10,5 @@ Fait:
 A faire: 
 - Corriger le pb de UTF-8
 - Ne logger que les réquêtes détecter comme anormale
-- Améliorer l'enreistrement des données loggées
+- Améliorer l'enregistrement des données loggées
+- Renvoyer une réponse dans le même format que chatgpt pour avertir le client que la requête est interdite
