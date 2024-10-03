@@ -1,6 +1,7 @@
 use hyper::header::HOST;
 use hyper::service::Service;
 use hyper::{Body, Request, Response};
+use serde_json::Value;
 use std::fs::File;
 use std::io::prelude::*;
 use time::format_description;
@@ -207,61 +208,104 @@ fn parse_cookie(cookie_str: &str) -> v1_2::Cookies {
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    // Load the MITM certificate and key
     let args: StartMitm = argh::from_env();
     let ca = CertificateAuthority::load_from_pem_files_with_passphrase_on_key(
         &args.cert_file,
         &args.key_file,
-        "third-wheel",
+        "third-wheel", // Passphrase for the private key
     )?;
+
+    // Create a channel for sending HAR log entries
     let (sender, mut receiver) = mpsc::channel(100);
 
+    // Create a middleware layer to intercept requests
     let make_har_sender = mitm_layer(move |req: Request<Body>, mut third_wheel: ThirdWheel| {
         let sender = sender.clone();
+
+        // Define the async block to process requests and responses
         let fut = async move {
             // Intercept the request parts and body
             let (req_parts, req_body) = req.into_parts();
             let body_bytes = hyper::body::to_bytes(req_body).await.unwrap().to_vec();
             let mut copied_bytes = Vec::with_capacity(body_bytes.len());
-            copied_bytes.extend(&body_bytes);
+            copied_bytes.extend(&body_bytes); // Make a copy of the request body
             let har_request = copy_from_http_request_to_har(&req_parts, copied_bytes).await;
 
+            // Extract host and request method from headers and URI
             let host = req_parts
                 .headers
                 .get(HOST)
                 .map(|h| h.to_str().unwrap_or(""))
                 .unwrap();
-            println!("{}", host);
+            let method = req_parts.method.to_string();
+            let url_request = req_parts.uri.path();
 
             let response;
-            if host.contains("chatgpt.com") {
-                println!("Blocked");
-                // If the request matches the condition to be blocked, return a custom response
-                response = Response::builder()
-                    .status(403)
-                    .header("Content-Type", "text/plain")
-                    .body(Body::from("Blocked by proxy"))
-                    .unwrap();
+            // Check if the request matches certain conditions to block
+            if host.contains("chatgpt.com")
+                && url_request.contains("/backend-api/conversation")
+                && method == "POST"
+            {
+                // Convert the body bytes to a string and handle errors
+                let body_string = match String::from_utf8(body_bytes.clone()) {
+                    Ok(valid_string) => valid_string,
+                    Err(e) => {
+                        eprintln!("Error converting bytes to UTF-8: {}", e);
+                        String::new()
+                    }
+                };
+
+                // Parse the request body as JSON and handle errors
+                let mut body_json: Value = match serde_json::from_str(&body_string) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        eprintln!("Failed to parse body as JSON: {}", e);
+                        Value::Null
+                    }
+                };
+
+                // Extract the message content and check for specific keywords
+                let message = body_json.get_mut("messages").unwrap();
+                let content = message[0].get_mut("content").unwrap();
+                let parts = content.get_mut("parts").unwrap();
+                let prompt = parts[0].to_string();
+                println!("Prompt {}", prompt);
+
+                // Block requests containing the word "confidential"
+                if prompt.contains("confidential") {
+                    println!("Blocked");
+                    // Return a 403 Forbidden response
+                    response = Response::builder()
+                        .status(403)
+                        .header("Content-Type", "text/plain")
+                        .body(Body::from("Blocked by proxy"))
+                        .unwrap();
+                } else {
+                    // Forward the request if it doesn't contain blocked content
+                    let body = Body::from(hyper::body::Bytes::from(body_bytes));
+                    let req = Request::<Body>::from_parts(req_parts, body);
+                    response = third_wheel.call(req).await.unwrap();
+                }
             } else {
-                println!("Ok");
-                // If the request is not blocked, proceed with forwarding it
+                // Forward other requests
                 let body = Body::from(hyper::body::Bytes::from(body_bytes));
                 let req = Request::<Body>::from_parts(req_parts, body);
-
-                // Forward the request to the actual server
                 response = third_wheel.call(req).await.unwrap();
             }
 
-            // Process the response and send it back
+            // Process the response and prepare it for logging
             let (res_parts, res_body) = response.into_parts();
-
             let body_bytes: Vec<u8> = hyper::body::to_bytes(res_body).await.unwrap().to_vec();
             let mut copied_bytes = Vec::with_capacity(body_bytes.len());
             copied_bytes.extend(&body_bytes);
             let har_response = copy_from_http_response_to_har(&res_parts, copied_bytes).await;
 
+            // Rebuild the response from its parts and body
             let body: Body = Body::from(hyper::body::Bytes::from(body_bytes));
             let response = Response::<Body>::from_parts(res_parts, body);
 
+            // Create HAR log entries
             let entries = Entries {
                 request: har_request,
                 response: har_response,
@@ -286,31 +330,34 @@ async fn main() -> Result<(), Error> {
                 },
                 pageref: None,
             };
+            // Send the HAR entries over the channel
             sender.send(entries).await.unwrap();
 
-            Ok(response)
+            Ok(response) // Return the response
         };
-        Box::pin(fut)
+        Box::pin(fut) // Return the future for the async operation
     });
 
+    // Set up and bind the MITM proxy
     let mitm_proxy = MitmProxy::builder(make_har_sender, ca).build();
     let addr = format!("127.0.0.1:{}", args.port).parse().unwrap();
     let (_, mitm_proxy) = mitm_proxy.bind(addr);
 
-    // Exécution du proxy
+    // Spawn a task to run the proxy
     let proxy_task = tokio::spawn(async {
         mitm_proxy.await.unwrap();
         println!("Proxy is running");
     });
 
+    // Store the intercepted HAR entries
     let mut entries = Vec::new();
 
-    // Open a file and write entries to it
+    // Open a file to write HAR logs
     let mut file = File::create(&args.outfile).unwrap();
-    // Lecture et affichage des entrées au fur et à mesure
+
+    // Spawn a task to receive and log entries
     let receiver_task = tokio::spawn(async move {
         while let Some(entry) = receiver.recv().await {
-            // On affiche et stocke les entrées
             entries.push(entry.clone());
 
             let out = har::Har {
@@ -327,21 +374,24 @@ async fn main() -> Result<(), Error> {
                 }),
             };
 
-            file.write_all(har::to_json(&out).unwrap().as_bytes()).unwrap();
+            // Write the HAR log to the file
+            file.write_all(har::to_json(&out).unwrap().as_bytes())
+                .unwrap();
+            file.write_all(b",\n").unwrap();
         }
     });
 
-    // On attend que les deux tâches se terminent (ceci arrive si l'une échoue ou si le proxy est arrêté)
+    // Wait for both proxy and logging tasks to complete
     let (proxy_result, receiver_result) = join!(proxy_task, receiver_task);
 
-    // Gestion des erreurs éventuelles
+    // Handle errors from the proxy or logging task
     if let Err(e) = proxy_result {
-        eprintln!("Error in proxy task: {:?}", e); // Log the error
+        eprintln!("Error in proxy task: {:?}", e);
     }
 
     if let Err(e) = receiver_result {
-        eprintln!("Error in receiver task: {:?}", e); // Log the error
+        eprintln!("Error in receiver task: {:?}", e);
     }
 
-    Ok(())
+    Ok(()) // Exit the function
 }
