@@ -1,7 +1,9 @@
+use futures_util::stream;
 use hyper::header::HOST;
 use hyper::service::Service;
+use hyper::StatusCode;
 use hyper::{Body, Request, Response};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::fs::File;
 use std::io::prelude::*;
 use time::format_description;
@@ -206,6 +208,100 @@ fn parse_cookie(cookie_str: &str) -> v1_2::Cookies {
     }
 }
 
+fn create_response(mut body_json: Value) -> Response<Body> {
+    // Default response builder
+    let mut response_builder = Response::builder().status(StatusCode::OK); // Default status code is 200 OK
+
+    // Set the Content-Type header to text/event-stream for streaming
+    response_builder =
+        response_builder.header(hyper::http::header::CONTENT_TYPE, "text/event-stream");
+
+    // Create a channel to send data chunks
+    let (tx, rx) = mpsc::channel(10);
+
+    // Spawn an async task to send data chunks to the stream
+    tokio::spawn(async move {
+        let mut body_json_copy = body_json.clone();
+        let messages = body_json.get_mut("messages").unwrap();
+        let parent_id = messages[0].get_mut("id").unwrap();
+        let conversation_id = body_json_copy.get_mut("conversation_id").unwrap();
+
+        // First message
+        let message1 = json!({
+            "message": {
+                "id": null,
+                "author": {
+                    "role": "assistant",
+                    "name": null,
+                    "metadata": {}
+                },
+                "create_time": null,
+                "update_time": null,
+                "content": {
+                    "content_type": "text",
+                    "parts": ["Impossible d'executer votre requête car elle contient des informations compromettantes pour votre entreprise !"]
+                },
+                "status": "finished_successfully",
+                "end_turn": true,
+                "weight": 1.0,
+                "metadata": {
+                    "citations": [],
+                    "content_references": [],
+                    "gizmo_id": null,
+                    "message_type": "next",
+                    "model_slug": "gpt-4o",
+                    "default_model_slug": "auto",
+                    "pad": "AAAAAAAAAAAAAAAAAAAAAA",
+                    "parent_id": parent_id,
+                    "finish_details": {
+                        "type": "stop",
+                        "stop_tokens": [200002]
+                    },
+                    "is_complete": true,
+                    "model_switcher_deny": []
+                },
+                "recipient": "all",
+                "channel": null
+            },
+            "conversation_id": conversation_id,
+            "error": null
+        });
+
+        // Second message
+        let message2 = json!({
+            "type": "conversation_detail_metadata",
+            "banner_info": null,
+            "blocked_features": [],
+            "model_limits": [],
+            "default_model_slug": "auto",
+            "conversation_id": conversation_id
+        });
+
+        // Send the messages
+        let _ = tx
+            .send(Ok::<_, hyper::Error>(format!("data: {}\n\n", message1)).into())
+            .await;
+        let _ = tx
+            .send(Ok::<_, hyper::Error>(format!("data: {}\n\n", message2)).into())
+            .await;
+        // Finally send the DONE message
+        let _ = tx
+            .send(Ok::<_, hyper::Error>("data: [DONE]\n\n".into()))
+            .await;
+    });
+
+    // Convert the receiver into a body stream
+    let body_stream = Body::wrap_stream(stream::unfold(rx, |mut rx| async {
+        match rx.recv().await {
+            Some(chunk) => Some((chunk, rx)),
+            None => None,
+        }
+    }));
+
+    // Build the response with the streaming body
+    response_builder.body(body_stream).unwrap()
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     // Load the MITM certificate and key
@@ -264,6 +360,7 @@ async fn main() -> Result<(), Error> {
                         Value::Null
                     }
                 };
+                let body_json_copy = body_json.clone();
 
                 // Extract the message content and check for specific keywords
                 let message = body_json.get_mut("messages").unwrap();
@@ -275,12 +372,7 @@ async fn main() -> Result<(), Error> {
                 // Block requests containing the word "confidential"
                 if prompt.contains("confidential") {
                     println!("Blocked");
-                    // Return a 403 Forbidden response
-                    response = Response::builder()
-                        .status(403)
-                        .header("Content-Type", "text/plain")
-                        .body(Body::from("Blocked by proxy"))
-                        .unwrap();
+                    response = create_response(body_json_copy);
                 } else {
                     // Forward the request if it doesn't contain blocked content
                     let body = Body::from(hyper::body::Bytes::from(body_bytes));
