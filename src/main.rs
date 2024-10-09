@@ -1,11 +1,12 @@
+use chrono::Local;
 use futures_util::stream;
-use hyper::header::HOST;
+use hyper::header::{CONTENT_TYPE, COOKIE, HOST, LOCATION, SET_COOKIE};
 use hyper::service::Service;
-use hyper::StatusCode;
-use hyper::{Body, Request, Response};
+use hyper::{Body, Request, Response, StatusCode};
 use serde_json::{json, Value};
 use std::fs::File;
 use std::io::prelude::*;
+use std::net::SocketAddr;
 use time::format_description;
 use tokio::join;
 use tokio::sync::mpsc;
@@ -37,13 +38,21 @@ struct StartMitm {
     key_file: String,
 }
 
+/// Converts an HTTP request into a HAR request format.
+///
+/// # Arguments
+/// * `parts` - The parts of the incoming HTTP request.
+/// * `body` - The body of the HTTP request as a byte vector.
+///
+/// # Returns
+/// A `v1_2::Request` object representing the HTTP request in HAR format.
 async fn copy_from_http_request_to_har(
     parts: &hyper::http::request::Parts,
     body: Vec<u8>,
 ) -> v1_2::Request {
     let method = parts.method.as_str().to_string();
     let url = format!("{}", parts.uri);
-    let http_version = "HTTP/1.1".to_string(); // Hardcoded for now because third-wheel only handles HTTP/1.1
+    let http_version = "HTTP/1.1".to_string();
     let mut headers = Vec::new();
     for (name, value) in &parts.headers {
         headers.push(Headers {
@@ -59,22 +68,22 @@ async fn copy_from_http_request_to_har(
     let cookies: Vec<v1_2::Cookies> = parts
         .headers
         .iter()
-        .filter(|(key, _)| key == &hyper::http::header::COOKIE)
+        .filter(|(key, _)| key == &COOKIE)
         .map(|(_, value)| parse_cookie(value.to_str().unwrap()))
         .collect();
 
     let body = match String::from_utf8(body) {
-        Ok(valid_string) => valid_string, // Return the valid UTF-8 string directly
+        Ok(valid_string) => valid_string,
         Err(e) => {
             eprintln!("Error converting bytes to UTF-8: {}", e);
-            String::new() // Or handle it however you want, e.g., return an empty string or some default
+            String::new()
         }
-    }; // TODO: handle other encodings correctly
+    };
     let body_size = body.len() as i64;
     let mime_type = parts
         .headers
         .iter()
-        .filter(|(key, _)| key == &hyper::http::header::CONTENT_TYPE)
+        .filter(|(key, _)| key == &CONTENT_TYPE)
         .map(|(_, value)| value.to_str().unwrap().to_string())
         .nth(0)
         .unwrap_or("".to_string());
@@ -103,6 +112,14 @@ async fn copy_from_http_request_to_har(
     }
 }
 
+/// Converts an HTTP response into a HAR response format.
+///
+/// # Arguments
+/// * `parts` - The parts of the HTTP response.
+/// * `body` - The body of the HTTP response as a byte vector.
+///
+/// # Returns
+/// A `v1_2::Response` object representing the HTTP response in HAR format.
 async fn copy_from_http_response_to_har(
     parts: &hyper::http::response::Parts,
     body: Vec<u8>,
@@ -122,7 +139,7 @@ async fn copy_from_http_response_to_har(
     let cookies: Vec<String> = parts
         .headers
         .iter()
-        .filter(|(key, _)| key == &hyper::http::header::SET_COOKIE)
+        .filter(|(key, _)| key == &SET_COOKIE)
         .map(|(_, value)| value.to_str().unwrap().to_string())
         .collect();
     let cookies: Vec<har::v1_2::Cookies> = cookies
@@ -133,7 +150,7 @@ async fn copy_from_http_response_to_har(
     let mime_type = parts
         .headers
         .iter()
-        .filter(|(key, _)| key == &hyper::http::header::CONTENT_TYPE)
+        .filter(|(key, _)| key == &CONTENT_TYPE)
         .map(|(_, value)| value.to_str().unwrap().to_string())
         .nth(0)
         .unwrap_or("".to_string());
@@ -142,7 +159,7 @@ async fn copy_from_http_response_to_har(
         let url_option = parts
             .headers
             .iter()
-            .filter(|(key, _)| key == &hyper::http::header::LOCATION)
+            .filter(|(key, _)| key == &LOCATION)
             .map(|(_, value)| value.to_str().unwrap_or("").to_string())
             .nth(0);
 
@@ -154,7 +171,7 @@ async fn copy_from_http_response_to_har(
         "".to_string() // Default case if not a redirection
     };
 
-    let http_version = "HTTP/1.1".to_string(); // Hardcoded for now because third-wheel only handles HTTP/1.1
+    let http_version = "HTTP/1.1".to_string();
 
     let body = match String::from_utf8(body) {
         Ok(valid_string) => valid_string,
@@ -164,14 +181,13 @@ async fn copy_from_http_response_to_har(
         }
     };
 
-    // TODO: handle other encodings correctly
     let body_size = body.len() as i64;
     let content = v1_2::Content {
         size: body_size,
         compression: None,
         mime_type: Some(mime_type),
         text: Some(body),
-        encoding: None, //TODO: handle the base64 case
+        encoding: None,
         comment: None,
     };
     v1_2::Response {
@@ -188,6 +204,13 @@ async fn copy_from_http_response_to_har(
     }
 }
 
+/// Parses a cookie string into a HAR Cookies format.
+///
+/// # Arguments
+/// * `cookie_str` - A string representation of a cookie.
+///
+/// # Returns
+/// A `v1_2::Cookies` object containing parsed cookie details.
 fn parse_cookie(cookie_str: &str) -> v1_2::Cookies {
     let parsed = Cookie::parse(cookie_str).unwrap();
     v1_2::Cookies {
@@ -201,23 +224,75 @@ fn parse_cookie(cookie_str: &str) -> v1_2::Cookies {
                 datetime.format(&format_description).ok()
             }
             cookie::Expiration::Session => Some("session".to_owned()),
-        }), // TODO: ISO 8601 format
+        }),
         http_only: parsed.http_only(),
         secure: parsed.secure(),
         comment: None,
     }
 }
 
-fn create_response(mut body_json: Value) -> Response<Body> {
+/// Converts the body of a request from bytes to a JSON value.
+///
+/// # Arguments
+/// * `body_bytes` - A byte vector containing the body of a request.
+///
+/// # Returns
+/// A `Value` representing the parsed JSON, or `Value::Null` if parsing fails.
+fn convert_body_to_json(body_bytes: Vec<u8>) -> Value {
+    // Convert the body bytes to a string and handle errors
+    let body_string = match String::from_utf8(body_bytes.clone()) {
+        Ok(valid_string) => valid_string,
+        Err(e) => {
+            eprintln!("Error converting bytes to UTF-8: {}", e);
+            String::new()
+        }
+    };
+
+    // Parse the request body as JSON and handle errors
+    match serde_json::from_str(&body_string) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("Failed to parse body as JSON: {}", e);
+            Value::Null
+        }
+    }
+}
+
+// Extracts specific content from a JSON request body, particularly the message.
+///
+/// # Arguments
+/// * `body_bytes` - A byte vector containing the body of a request.
+///
+/// # Returns
+/// A string containing the message content extracted from the JSON body.
+fn parse_request(body_bytes: Vec<u8>) -> String {
+    let mut body_json: Value = convert_body_to_json(body_bytes);
+
+    // Extract the message content and check for specific keywords
+    let message = body_json.get_mut("messages").unwrap();
+    let content = message[0].get_mut("content").unwrap();
+    let parts = content.get_mut("parts").unwrap();
+    parts[0].to_string()
+}
+
+/// Creates an HTTP response for streaming data using Server-Sent Events (SSE).
+///
+/// # Arguments
+/// * `body_bytes` - A byte vector containing the body of the request.
+///
+/// # Returns
+/// A `Response<Body>` object representing the HTTP response.
+fn create_response(body_bytes: Vec<u8>) -> Response<Body> {
     // Default response builder
     let mut response_builder = Response::builder().status(StatusCode::OK); // Default status code is 200 OK
 
     // Set the Content-Type header to text/event-stream for streaming
-    response_builder =
-        response_builder.header(hyper::http::header::CONTENT_TYPE, "text/event-stream");
+    response_builder = response_builder.header(CONTENT_TYPE, "text/event-stream");
 
     // Create a channel to send data chunks
     let (tx, rx) = mpsc::channel(10);
+
+    let mut body_json = convert_body_to_json(body_bytes);
 
     // Spawn an async task to send data chunks to the stream
     tokio::spawn(async move {
@@ -302,6 +377,70 @@ fn create_response(mut body_json: Value) -> Response<Body> {
     response_builder.body(body_stream).unwrap()
 }
 
+/// Logs a blocked HTTP request and returns its HAR representation.
+///
+/// # Arguments
+/// * `req_parts` - The parts of the HTTP request.
+/// * `body_bytes` - The body of the HTTP request as a byte vector.
+///
+/// # Returns
+/// A tuple containing the HAR log entries and the HTTP response for the blocked request.
+async fn log_blocked_request(
+    req_parts: &hyper::http::request::Parts,
+    body_bytes: Vec<u8>,
+) -> (Entries, Response<Body>) {
+    // Process the request and prepare it for logging
+    let mut copied_bytes = Vec::with_capacity(body_bytes.len());
+    copied_bytes.extend(&body_bytes); // Make a copy of the request body
+    let har_request = copy_from_http_request_to_har(&req_parts, copied_bytes).await;
+
+    // Creation of the response
+    let response = create_response(body_bytes);
+    let (res_parts, res_body) = response.into_parts();
+
+    // Process the response and prepare it for logging
+    let body_bytes: Vec<u8> = hyper::body::to_bytes(res_body).await.unwrap().to_vec();
+    let mut copied_bytes = Vec::with_capacity(body_bytes.len());
+    copied_bytes.extend(&body_bytes); // Make a copy of the response body
+    let har_response = copy_from_http_response_to_har(&res_parts, copied_bytes).await;
+
+    // Create HAR log entries
+    let entries = Entries {
+        request: har_request,
+        response: har_response,
+        time: 0.0,
+        server_ip_address: None,
+        connection: None,
+        comment: None,
+        started_date_time: Local::now().format("%d/%m/%Y %H:%M:%S").to_string(),
+        cache: v1_2::Cache {
+            before_request: None,
+            after_request: None,
+        },
+        timings: v1_2::Timings {
+            blocked: None,
+            dns: None,
+            connect: None,
+            send: 0.0,
+            wait: 0.0,
+            receive: 0.0,
+            ssl: None,
+            comment: None,
+        },
+        pageref: None,
+    };
+
+    // Rebuild the response from its parts and body
+    let body: Body = Body::from(hyper::body::Bytes::from(body_bytes));
+    let response = Response::<Body>::from_parts(res_parts, body);
+
+    (entries, response)
+}
+
+/// The main entry point for running the TLS MITM proxy.
+///
+/// # Returns
+/// A `Result<(), Error>` indicating success or failure of the operation.
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     // Load the MITM certificate and key
@@ -321,12 +460,14 @@ async fn main() -> Result<(), Error> {
 
         // Define the async block to process requests and responses
         let fut = async move {
+            // Get the client IP from the request extensions
+            if let Some(client_ip) = req.extensions().get::<SocketAddr>() {
+                println!("Captured Client IP: {}", client_ip);
+            }
+
             // Intercept the request parts and body
             let (req_parts, req_body) = req.into_parts();
             let body_bytes = hyper::body::to_bytes(req_body).await.unwrap().to_vec();
-            let mut copied_bytes = Vec::with_capacity(body_bytes.len());
-            copied_bytes.extend(&body_bytes); // Make a copy of the request body
-            let har_request = copy_from_http_request_to_har(&req_parts, copied_bytes).await;
 
             // Extract host and request method from headers and URI
             let host = req_parts
@@ -337,93 +478,35 @@ async fn main() -> Result<(), Error> {
             let method = req_parts.method.to_string();
             let url_request = req_parts.uri.path();
 
-            let response;
             // Check if the request matches certain conditions to block
             if host.contains("chatgpt.com")
                 && url_request.contains("/backend-api/conversation")
                 && method == "POST"
             {
-                // Convert the body bytes to a string and handle errors
-                let body_string = match String::from_utf8(body_bytes.clone()) {
-                    Ok(valid_string) => valid_string,
-                    Err(e) => {
-                        eprintln!("Error converting bytes to UTF-8: {}", e);
-                        String::new()
-                    }
-                };
-
-                // Parse the request body as JSON and handle errors
-                let mut body_json: Value = match serde_json::from_str(&body_string) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        eprintln!("Failed to parse body as JSON: {}", e);
-                        Value::Null
-                    }
-                };
-                let body_json_copy = body_json.clone();
-
-                // Extract the message content and check for specific keywords
-                let message = body_json.get_mut("messages").unwrap();
-                let content = message[0].get_mut("content").unwrap();
-                let parts = content.get_mut("parts").unwrap();
-                let prompt = parts[0].to_string();
+                // Extract the message write by the user in his prompt
+                let prompt = parse_request(body_bytes.clone());
                 println!("Prompt {}", prompt);
 
                 // Block requests containing the word "confidential"
+                // TODO : Change the condition by the IA detection
                 if prompt.contains("confidential") {
                     println!("Blocked");
-                    response = create_response(body_json_copy);
-                } else {
-                    // Forward the request if it doesn't contain blocked content
-                    let body = Body::from(hyper::body::Bytes::from(body_bytes));
-                    let req = Request::<Body>::from_parts(req_parts, body);
-                    response = third_wheel.call(req).await.unwrap();
+
+                    // Get the tuple containing the HAR log entries and the HTTP response for the blocked request
+                    let (entries, response) =
+                        log_blocked_request(&req_parts, body_bytes.clone()).await;
+
+                    // Send the HAR entries over the channel
+                    sender.send(entries).await.unwrap();
+
+                    return Ok(response); // Return the response
                 }
-            } else {
-                // Forward other requests
-                let body = Body::from(hyper::body::Bytes::from(body_bytes));
-                let req = Request::<Body>::from_parts(req_parts, body);
-                response = third_wheel.call(req).await.unwrap();
             }
 
-            // Process the response and prepare it for logging
-            let (res_parts, res_body) = response.into_parts();
-            let body_bytes: Vec<u8> = hyper::body::to_bytes(res_body).await.unwrap().to_vec();
-            let mut copied_bytes = Vec::with_capacity(body_bytes.len());
-            copied_bytes.extend(&body_bytes);
-            let har_response = copy_from_http_response_to_har(&res_parts, copied_bytes).await;
-
-            // Rebuild the response from its parts and body
-            let body: Body = Body::from(hyper::body::Bytes::from(body_bytes));
-            let response = Response::<Body>::from_parts(res_parts, body);
-
-            // Create HAR log entries
-            let entries = Entries {
-                request: har_request,
-                response: har_response,
-                time: 0.0,
-                server_ip_address: None,
-                connection: None,
-                comment: None,
-                started_date_time: "bla".to_string(),
-                cache: v1_2::Cache {
-                    before_request: None,
-                    after_request: None,
-                },
-                timings: v1_2::Timings {
-                    blocked: None,
-                    dns: None,
-                    connect: None,
-                    send: 0.0,
-                    wait: 0.0,
-                    receive: 0.0,
-                    ssl: None,
-                    comment: None,
-                },
-                pageref: None,
-            };
-            // Send the HAR entries over the channel
-            sender.send(entries).await.unwrap();
+            // Forward the request if it doesn't contain blocked content
+            let body = Body::from(hyper::body::Bytes::from(body_bytes));
+            let req = Request::<Body>::from_parts(req_parts, body);
+            let response = third_wheel.call(req).await.unwrap();
 
             Ok(response) // Return the response
         };
@@ -456,12 +539,12 @@ async fn main() -> Result<(), Error> {
                 log: har::Spec::V1_2(v1_2::Log {
                     entries: entries.clone(),
                     browser: None,
-                    comment: None,
+                    comment: Some("Confidential disclosure blocked".to_string()),
                     pages: None,
                     creator: v1_2::Creator {
-                        name: "third-wheel".to_string(),
+                        name: "SentineLLM".to_string(),
                         version: "0.5".to_string(),
-                        comment: None,
+                        comment: Some("The IA at the service of confidentiality".to_string()),
                     },
                 }),
             };

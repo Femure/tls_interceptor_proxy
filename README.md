@@ -6,9 +6,10 @@ Fait:
 - Filtrer les requêtes pour ne garder qu'un domain visé ex:chatgpt.com
 - Viser seulement les requêtes POST
 - Réussir à extraire les données de la requête pour ensuite les envoyer en analyse
+- Ne logger que les réquêtes détecter comme anormale
+- Renvoyer une réponse dans le même format que chatgpt pour avertir le client que la requête est interdite
 
 A faire: 
 - Corriger le pb de UTF-8
-- Ne logger que les réquêtes détecter comme anormale
 - Améliorer l'enregistrement des données loggées
-- Renvoyer une réponse dans le même format que chatgpt pour avertir le client que la requête est interdite
+- Récupérer l'IP de celui qui à envoyer la requête compromettante
