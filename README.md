@@ -17,7 +17,6 @@ A faire:
 - Améliorer l'envoi de l'adresse IP
 - Rendre le code et le proxy sécurisés
 - Nettoyer le code (supprimer les dépendences inutiles, améliorer la lisibilité du code...)
-- Est-ce qu'on veut en sorte que ChatGPT enregistre la conversation si l'utilisateur envoie une requête compromettante sur un nouveau prompt ?
 
 Problèmes recontrés: 
 - Lorsqu'un utilisateur envoyer des infos confidentielles dans une nouvelle conversation Chatgpt
