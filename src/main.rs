@@ -1,21 +1,34 @@
 use chrono::Local;
+use core::net::SocketAddr;
 use futures_util::stream;
 use hyper::header::{CONTENT_TYPE, COOKIE, HOST, LOCATION, SET_COOKIE};
 use hyper::service::Service;
 use hyper::{Body, Request, Response, StatusCode};
+use serde_json::Value::Null;
 use serde_json::{json, Value};
 use std::fs::File;
 use std::io::prelude::*;
-use std::net::SocketAddr;
 use time::format_description;
 use tokio::join;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use argh::FromArgs;
 use cookie::Cookie;
 use har::v1_2::{self, Entries, Headers};
 
-use third_wheel::*;
+// Declare the modules that you want to include
+mod third_wheel {
+    pub mod certificates; // if you need to use certificates.rs
+    pub mod error; // if you need to use error.rs
+    pub mod proxy; // if you need to use proxy.rs
+}
+
+// Import necessary modules and items
+use third_wheel::certificates::CertificateAuthority;
+use third_wheel::error::Error;
+use third_wheel::proxy::mitm::{mitm_layer, ThirdWheel};
+use third_wheel::proxy::MitmProxy;
 
 /// Run a TLS mitm proxy that records a HTTP ARchive (HAR) file of the session.
 /// Currently this is a proof-of-concept and won't handle binary data or non-utf8 encodings
@@ -269,10 +282,14 @@ fn parse_request(body_bytes: Vec<u8>) -> String {
     let mut body_json: Value = convert_body_to_json(body_bytes);
 
     // Extract the message content and check for specific keywords
-    let message = body_json.get_mut("messages").unwrap();
-    let content = message[0].get_mut("content").unwrap();
-    let parts = content.get_mut("parts").unwrap();
-    parts[0].to_string()
+    if body_json.get_mut("messages").is_some() {
+        let message = body_json.get_mut("messages").unwrap();
+        let content = message[0].get_mut("content").unwrap();
+        let parts = content.get_mut("parts").unwrap();
+        parts[0].to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// Creates an HTTP response for streaming data using Server-Sent Events (SSE).
@@ -299,19 +316,25 @@ fn create_response(body_bytes: Vec<u8>) -> Response<Body> {
         let mut body_json_copy = body_json.clone();
         let messages = body_json.get_mut("messages").unwrap();
         let parent_id = messages[0].get_mut("id").unwrap();
-        let conversation_id = body_json_copy.get_mut("conversation_id").unwrap();
+        let is_conversation_id = body_json_copy.get_mut("conversation_id").is_none();
+        let conversation_id = if is_conversation_id {
+            // Creation of new conversation
+            &mut serde_json::Value::String(Uuid::new_v4().to_string())
+        } else {
+            body_json_copy.get_mut("conversation_id").unwrap()
+        };
+        let message_id = serde_json::Value::String(Uuid::new_v4().to_string());
 
-        // First message
         let message1 = json!({
             "message": {
-                "id": null,
+                "id": message_id,
                 "author": {
                     "role": "assistant",
-                    "name": null,
+                    "name": Null,
                     "metadata": {}
                 },
-                "create_time": null,
-                "update_time": null,
+                "create_time": Null,
+                "update_time": Null,
                 "content": {
                     "content_type": "text",
                     "parts": ["Impossible d'executer votre requête car elle contient des informations compromettantes pour votre entreprise !"]
@@ -322,7 +345,7 @@ fn create_response(body_bytes: Vec<u8>) -> Response<Body> {
                 "metadata": {
                     "citations": [],
                     "content_references": [],
-                    "gizmo_id": null,
+                    "gizmo_id": Null,
                     "message_type": "next",
                     "model_slug": "gpt-4o",
                     "default_model_slug": "auto",
@@ -336,16 +359,25 @@ fn create_response(body_bytes: Vec<u8>) -> Response<Body> {
                     "model_switcher_deny": []
                 },
                 "recipient": "all",
-                "channel": null
+                "channel": Null
             },
             "conversation_id": conversation_id,
-            "error": null
+            "error": Null
         });
 
-        // Second message
-        let message2 = json!({
+        let message2 = if is_conversation_id {
+            json!({
+                "type": "title_generation",
+                "title": "New chat",
+                "conversation_id": conversation_id
+            })
+        } else {
+            Value::String(String::new())
+        };
+
+        let message3 = json!({
             "type": "conversation_detail_metadata",
-            "banner_info": null,
+            "banner_info": Null,
             "blocked_features": [],
             "model_limits": [],
             "default_model_slug": "auto",
@@ -358,6 +390,9 @@ fn create_response(body_bytes: Vec<u8>) -> Response<Body> {
             .await;
         let _ = tx
             .send(Ok::<_, hyper::Error>(format!("data: {}\n\n", message2)).into())
+            .await;
+        let _ = tx
+            .send(Ok::<_, hyper::Error>(format!("data: {}\n\n", message3)).into())
             .await;
         // Finally send the DONE message
         let _ = tx
@@ -388,6 +423,7 @@ fn create_response(body_bytes: Vec<u8>) -> Response<Body> {
 async fn log_blocked_request(
     req_parts: &hyper::http::request::Parts,
     body_bytes: Vec<u8>,
+    ip_client: SocketAddr,
 ) -> (Entries, Response<Body>) {
     // Process the request and prepare it for logging
     let mut copied_bytes = Vec::with_capacity(body_bytes.len());
@@ -409,7 +445,7 @@ async fn log_blocked_request(
         request: har_request,
         response: har_response,
         time: 0.0,
-        server_ip_address: None,
+        server_ip_address: Some(ip_client.to_string()),
         connection: None,
         comment: None,
         started_date_time: Local::now().format("%d/%m/%Y %H:%M:%S").to_string(),
@@ -461,9 +497,7 @@ async fn main() -> Result<(), Error> {
         // Define the async block to process requests and responses
         let fut = async move {
             // Get the client IP from the request extensions
-            if let Some(client_ip) = req.extensions().get::<SocketAddr>() {
-                println!("Captured Client IP: {}", client_ip);
-            }
+            let ip_client = third_wheel.get_client_ip();
 
             // Intercept the request parts and body
             let (req_parts, req_body) = req.into_parts();
@@ -477,10 +511,9 @@ async fn main() -> Result<(), Error> {
                 .unwrap();
             let method = req_parts.method.to_string();
             let url_request = req_parts.uri.path();
-
             // Check if the request matches certain conditions to block
-            if host.contains("chatgpt.com")
-                && url_request.contains("/backend-api/conversation")
+            if host.eq("chatgpt.com")
+                && url_request.eq("/backend-api/conversation")
                 && method == "POST"
             {
                 // Extract the message write by the user in his prompt
@@ -494,7 +527,7 @@ async fn main() -> Result<(), Error> {
 
                     // Get the tuple containing the HAR log entries and the HTTP response for the blocked request
                     let (entries, response) =
-                        log_blocked_request(&req_parts, body_bytes.clone()).await;
+                        log_blocked_request(&req_parts, body_bytes.clone(), ip_client).await;
 
                     // Send the HAR entries over the channel
                     sender.send(entries).await.unwrap();

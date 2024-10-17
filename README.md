@@ -8,21 +8,32 @@ Fait:
 - Réussir à extraire les données de la requête pour ensuite les envoyer en analyse
 - Ne logger que les réquêtes détecter comme anormale
 - Renvoyer une réponse dans le même format que chatgpt pour avertir le client que la requête est interdite
+- Récupérer l'IP de celui qui à envoyer la requête compromettante
+- Améliorer l'enregistrement des données loggées
+- Création d'un Dockfile pour déployer l'application dans un container
+- Ajout des fichiers du crate modifié en local pour garder les modifications lors du déploiement
 
 A faire: 
-- Améliorer l'enregistrement des données loggées
-- Récupérer l'IP de celui qui à envoyer la requête compromettante
+- Améliorer l'envoie de l'addresse IP
+- Rendre le code et le proxy sécurisé
+- Nettoyer le code (supprimer les dépendences inutiles, améliorer la lisibilité du code...)
+- Est-ce qu'on veut en sorte que ChatGPT enregistre la conversation si l'utilisateur envoie une requête compromettante sur un nouveau prompt ?
 
 Problèmes recontrés: 
+- Lorsqu'un utilisateur envoyer des infos confidentielles dans une nouvelle conversation chatgpt
+la conversation n'a pas encore d'ID. Il a donc fallu en créer un et ensuite faire en sorte qu'elle possède un
+titre ici "New conversation" et qu'elle soit enregistrer dans la base de donnée avec les autres prompt. Pour le
+moment, je n'arrive pas à l'enregistrer dans la base pour le charger après un refresh.
 - La récupération de l'IP car ce n'est pas implementé dans le service proxy
 du crate et je ne peux pas envelopper la couche mitm avec le service qui récupère l'IP du client.
-Je suis donc obligé de modifier le code du crate pour ajouter cette fonctionnalité mais pour le 
-moment je n'arrive pas récupérer l'adresse IP du client une fois que je l'ajoute aux extensions de 
-la requête http.
+Je suis donc obligé de modifier le code du crate pour ajouter cette fonctionnalité. Il était impossible 
+de d'envoyer l'addresse IP du client au travers des service implémenté dans le crate du proxy. Il a donc
+fallu passer l'addresse IP au travers d'un methode du crate. Je cherche encore un moyen de faire ça plus
+proprement.
 - Forger la requête réponse lorsque l'utilisateur envoie un prompt sur Chatgpt avec des infos
 comprettante. Je devais intercepter la réponse de base de Chatgpt pour comprendre comment est construit
 la réponse afin de copier les éléments et de simplement modifier les informations utiles.
 - Réussir à bloquer la requête. Pour ça il fallait déjà mettre des conditions sur la requête envoyée,
 ici c'est sur l'hôte (chatgpt.com), sur le chemin de l'URL (/backend-api/conversation) et sur la méthode (POST).
 Une fois les conditions établies au départ au lieu de laisser passer la requête je crée une réponse simple avec
-le code 
+le code

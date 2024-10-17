@@ -5,9 +5,7 @@ edition = "2021"
 
 [dependencies]
 argh = "0.1.12"
-hyper = "^0.14.3"
-third-wheel = "0.6.0"
-tokio = "1.40.0"
+tokio = { version = "1.40.0", features = ["full"] }
 har = "0.8.0"
 cookie = "0.18.1"
 time = "0.3.36"
@@ -16,3 +14,10 @@ chrono = "0.4"
 futures-util = "0.3.31"
 tower = "0.5.1"
 futures = "0.3.31"
+openssl = "0.10.30"
+log = "^0.4"
+tokio-native-tls = "0.3.0"
+native-tls = "^0.2"
+thiserror = "^1.0"
+hyper = { version = "0.14", features = ["full", "client", "server", "http1"] }
+uuid = { version = "1", features = ["v4"] }
