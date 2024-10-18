@@ -297,7 +297,6 @@ async fn connect_to_target_with_tls(
         .map(|s| s.as_str())
         .unwrap_or(host);
     let target_stream = TcpStream::connect(format!("{}:{}", host_address, port)).await?;
-    println!("{}:{}", host_address, port);
 
     let mut connector = native_tls::TlsConnector::builder();
     for root_certificate in additional_root_certificates {
