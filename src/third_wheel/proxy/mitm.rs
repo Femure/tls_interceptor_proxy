@@ -132,7 +132,9 @@ impl Service<Request<Body>> for ThirdWheel {
 
 #[derive(Clone)]
 pub struct MitmService<F: Clone, S: Clone> {
+    // MitmLayer
     f: F,
+    //Service Thirdwheel
     inner: S,
 }
 
@@ -151,6 +153,7 @@ where
 
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
+    // Poll of the thirdwheel service
     fn poll_ready(
         &mut self,
         cx: &mut std::task::Context<'_>,
@@ -158,6 +161,7 @@ where
         self.inner.poll_ready(cx)
     }
 
+    // Call of the thirdwheel service
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         (self.f)(req, self.inner.clone())
     }
@@ -172,7 +176,9 @@ impl<S: Clone, F: Clone> Layer<S> for MitmLayer<F> {
     type Service = MitmService<F, S>;
     fn layer(&self, inner: S) -> Self::Service {
         MitmService {
+            // MitmLayer
             f: self.f.clone(),
+            //Service Thirdwheel
             inner,
         }
     }
