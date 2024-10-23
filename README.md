@@ -14,12 +14,11 @@ Fait:
 - Ajout des fichiers du crate modifié en local pour garder les modifications lors du déploiement
 
 A faire: 
-- Améliorer l'envoi de l'adresse IP
 - Rendre le code et le proxy sécurisés
 - Nettoyer le code (supprimer les dépendences inutiles, améliorer la lisibilité du code...)
 
 Problèmes recontrés: 
-- Lorsqu'un utilisateur envoyer des infos confidentielles dans une nouvelle conversation Chatgpt
+- Lorsqu'un utilisateur envoye des infos confidentielles dans une nouvelle conversation Chatgpt
 la conversation n'a pas encore d'ID. Il a donc fallu en créer un et ensuite faire en sorte qu'elle possède un
 titre ici "New conversation" et qu'elle soit enregistrée dans la base de données avec les autres prompts. Pour le
 moment, je n'arrive pas à l'enregistrer dans la base pour le charger après un refresh.
