@@ -98,7 +98,7 @@ async fn copy_from_http_request_to_har(
         .iter()
         .filter(|(key, _)| key == &CONTENT_TYPE)
         .map(|(_, value)| value.to_str().unwrap().to_string())
-        .nth(0)
+        .next()
         .unwrap_or("".to_string());
     let post_data = if body_size > 0 {
         Some(v1_2::PostData {
@@ -165,7 +165,7 @@ async fn copy_from_http_response_to_har(
         .iter()
         .filter(|(key, _)| key == &CONTENT_TYPE)
         .map(|(_, value)| value.to_str().unwrap().to_string())
-        .nth(0)
+        .next()
         .unwrap_or("".to_string());
 
     let redirect_url = if parts.status.is_redirection() {
@@ -174,7 +174,7 @@ async fn copy_from_http_response_to_har(
             .iter()
             .filter(|(key, _)| key == &LOCATION)
             .map(|(_, value)| value.to_str().unwrap_or("").to_string())
-            .nth(0);
+            .next();
 
         match url_option {
             Some(url) => url,
@@ -386,13 +386,13 @@ fn create_response(body_bytes: Vec<u8>) -> Response<Body> {
 
         // Send the messages
         let _ = tx
-            .send(Ok::<_, hyper::Error>(format!("data: {}\n\n", message1)).into())
+            .send(Ok::<_, hyper::Error>(format!("data: {}\n\n", message1)))
             .await;
         let _ = tx
-            .send(Ok::<_, hyper::Error>(format!("data: {}\n\n", message2)).into())
+            .send(Ok::<_, hyper::Error>(format!("data: {}\n\n", message2)))
             .await;
         let _ = tx
-            .send(Ok::<_, hyper::Error>(format!("data: {}\n\n", message3)).into())
+            .send(Ok::<_, hyper::Error>(format!("data: {}\n\n", message3)))
             .await;
         // Finally send the DONE message
         let _ = tx
@@ -402,11 +402,7 @@ fn create_response(body_bytes: Vec<u8>) -> Response<Body> {
 
     // Convert the receiver into a body stream
     let body_stream = Body::wrap_stream(stream::unfold(rx, |mut rx| async {
-        match rx.recv().await {
-            Some(chunk) => Some((chunk, rx)),
-            None => None,
-            
-        }
+        rx.recv().await.map(|chunk| (chunk, rx))
     }));
 
     // Build the response with the streaming body
@@ -429,7 +425,7 @@ async fn log_blocked_request(
     // Process the request and prepare it for logging
     let mut copied_bytes = Vec::with_capacity(body_bytes.len());
     copied_bytes.extend(&body_bytes); // Make a copy of the request body
-    let har_request = copy_from_http_request_to_har(&req_parts, copied_bytes).await;
+    let har_request = copy_from_http_request_to_har(req_parts, copied_bytes).await;
 
     // Creation of the response
     let response = create_response(body_bytes);

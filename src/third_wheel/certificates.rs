@@ -17,6 +17,7 @@ use crate::third_wheel::error::Error;
 /// A certificate authority to use for impersonating websites during the
 /// man-in-the-middle. The client must trust the given certificate for it to
 /// trust the proxy.
+#[derive(Clone)]
 pub struct CertificateAuthority {
     /// the certificate authority's self-signed certificate
     pub cert: X509,
@@ -118,7 +119,7 @@ pub fn create_signed_certificate_for_domain(
         .build(&cert_builder.x509v3_context(Some(&ca.cert), None))?;
     cert_builder.append_extension(subject_alternative_name)?;
 
-    cert_builder.set_issuer_name(&ca.cert.issuer_name())?;
+    cert_builder.set_issuer_name(ca.cert.issuer_name())?;
     cert_builder.set_pubkey(&ca.key)?;
     cert_builder.sign(&ca.key, MessageDigest::sha256())?;
 
@@ -157,7 +158,7 @@ fn copy_alt_names(in_cert: &X509) -> Option<SubjectAlternativeName> {
                     //TODO: The openssl library exposes .ipaddress -> &[u8] and the builder wants &str
                     //TODO: I have no idea whether this is u8 ascii representation of the ip or what so
                     //TODO: lets just go with it for now.
-                    subject_alternative_name.ip(&String::from_utf8(ipaddress.to_vec())
+                    subject_alternative_name.ip(core::str::from_utf8(ipaddress)
                         .expect("ip address on certificate is not formatted as ascii"));
                 }
             }
@@ -189,7 +190,7 @@ pub(crate) fn spoof_certificate(
         cert_builder.append_extension(subject_alternative_name)?;
     }
 
-    cert_builder.set_issuer_name(&ca.cert.issuer_name())?;
+    cert_builder.set_issuer_name(ca.cert.issuer_name())?;
     cert_builder.set_pubkey(&ca.key)?;
     cert_builder.sign(&ca.key, MessageDigest::sha256())?;
 

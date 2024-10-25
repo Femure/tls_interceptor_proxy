@@ -2,8 +2,6 @@ use argh::FromArgs;
 use std::fs::File;
 use std::io::Write;
 
-use third_wheel::*;
-
 fn run_sign_certificate_for_domain(
     outfile: &str,
     cert_file: &str,

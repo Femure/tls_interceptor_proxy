@@ -9,21 +9,21 @@ use std::net::SocketAddr;
 use tokio::sync::{mpsc, oneshot};
 use tower::Layer;
 
+// Alias for complex type used in sender and receiver channels
+type RequestResponsePair = (
+    oneshot::Sender<Result<Response<Body>, Error>>,
+    Request<Body>,
+);
+
 pub(crate) struct RequestSendingSynchronizer {
     request_sender: SendRequest<Body>,
-    receiver: mpsc::UnboundedReceiver<(
-        oneshot::Sender<Result<Response<Body>, Error>>,
-        Request<Body>,
-    )>,
+    receiver: mpsc::UnboundedReceiver<RequestResponsePair>,
 }
 
 impl RequestSendingSynchronizer {
     pub(crate) fn new(
         request_sender: SendRequest<Body>,
-        receiver: mpsc::UnboundedReceiver<(
-            oneshot::Sender<Result<Response<Body>, Error>>,
-            Request<Body>,
-        )>,
+        receiver: mpsc::UnboundedReceiver<RequestResponsePair>,
     ) -> Self {
         Self {
             request_sender,
@@ -46,12 +46,12 @@ impl RequestSendingSynchronizer {
                 
             // If the path is valid, then send the request to the target by removing proxy-connection from the header
             // and catch the response future of the request
-            let response_fut = relativized_uri.and_then(|path| {
+            let response_fut = relativized_uri.map(|path| {
                 *request.uri_mut() = path;
                 let proxy_connection: HeaderName = HeaderName::from_lowercase(b"proxy-connection")
                     .expect("Infallible: hardcoded header name");
                 request.headers_mut().remove(&proxy_connection);
-                Ok(self.request_sender.send_request(request))
+                self.request_sender.send_request(request)
             });
 
             // Get the response from response future
@@ -71,19 +71,13 @@ impl RequestSendingSynchronizer {
 /// A service that will proxy traffic to a target server and return unmodified responses
 #[derive(Clone)]
 pub struct ThirdWheel {
-    sender: mpsc::UnboundedSender<(
-        oneshot::Sender<Result<Response<Body>, Error>>,
-        Request<Body>,
-    )>,
+    sender: mpsc::UnboundedSender<RequestResponsePair>,
     client_ip: SocketAddr,
 }
 
 impl ThirdWheel {
     pub(crate) fn new(
-        sender: mpsc::UnboundedSender<(
-            oneshot::Sender<Result<Response<Body>, Error>>,
-            Request<Body>,
-        )>,
+        sender: mpsc::UnboundedSender<RequestResponsePair>,
         client_ip: SocketAddr,
     ) -> Self {
         Self {
@@ -126,7 +120,7 @@ impl Service<Request<Body>> for ThirdWheel {
                 .await
                 .map_err(|_| Error::ServerError("Failed to get response from server".to_string()))?
         };
-        return Box::pin(fut);
+        Box::pin(fut)
     }
 }
 
@@ -201,5 +195,5 @@ where
             -> Pin<Box<dyn Future<Output = Result<Response<Body>, Error>> + Send>>
         + Clone,
 {
-    return MitmLayer { f };
+    MitmLayer { f }
 }
