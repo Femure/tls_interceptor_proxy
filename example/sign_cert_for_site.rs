@@ -2,6 +2,12 @@ use argh::FromArgs;
 use std::fs::File;
 use std::io::Write;
 
+// Import necessary modules and items
+use third_wheel::{
+    certificates::{create_signed_certificate_for_domain, CertificateAuthority},
+    error::Error,
+};
+
 fn run_sign_certificate_for_domain(
     outfile: &str,
     cert_file: &str,

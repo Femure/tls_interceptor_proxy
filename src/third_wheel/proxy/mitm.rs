@@ -1,13 +1,14 @@
-use std::pin::Pin;
-
-use crate::third_wheel::error::Error;
 use futures::Future;
-use hyper::{header::HeaderName, Request, Response};
 use hyper::{client::conn::SendRequest, service::Service, Body};
-use log::error;
+use hyper::{header::HeaderName, Request, Response};
 use std::net::SocketAddr;
+use std::pin::Pin;
 use tokio::sync::{mpsc, oneshot};
 use tower::Layer;
+
+use super::Error;
+
+use log::error;
 
 // Alias for complex type used in sender and receiver channels
 type RequestResponsePair = (
@@ -43,7 +44,7 @@ impl RequestSendingSynchronizer {
                         .parse()
                         .map_err(|_| Error::RequestError("Given URI was invalid".to_string()))
                 });
-                
+
             // If the path is valid, then send the request to the target by removing proxy-connection from the header
             // and catch the response future of the request
             let response_fut = relativized_uri.map(|path| {
@@ -138,8 +139,7 @@ where
     F: FnMut(
             Request<Body>,
             S,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Response<Body>, Error>> + Send>>
+        ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, Error>> + Send>>
         + Clone,
 {
     type Response = Response<Body>;
@@ -191,8 +191,7 @@ where
     F: FnMut(
             Request<Body>,
             ThirdWheel,
-        )
-            -> Pin<Box<dyn Future<Output = Result<Response<Body>, Error>> + Send>>
+        ) -> Pin<Box<dyn Future<Output = Result<Response<Body>, Error>> + Send>>
         + Clone,
 {
     MitmLayer { f }

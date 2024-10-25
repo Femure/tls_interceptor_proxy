@@ -17,17 +17,13 @@ use tower::Layer;
 
 use tokio_native_tls::{TlsAcceptor, TlsStream};
 
-use crate::third_wheel::certificates::spoof_certificate;
-use crate::third_wheel::error::Error;
-
 use log::error;
 
-use crate::third_wheel::{
-    certificates::{native_identity, CertificateAuthority},
-    proxy::mitm::ThirdWheel,
+use super::{
+    certificates::{native_identity, spoof_certificate, CertificateAuthority},
+    error::Error,
+    proxy::mitm::{RequestSendingSynchronizer, ThirdWheel},
 };
-
-use self::mitm::RequestSendingSynchronizer;
 
 pub mod mitm;
 

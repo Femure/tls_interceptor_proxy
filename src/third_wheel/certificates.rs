@@ -1,18 +1,22 @@
-use log::debug;
 use std::io;
 use std::{fs::File, path::Path};
+use openssl::{
+    asn1::Asn1Time,
+    bn::{BigNum, MsbOption},
+    hash::MessageDigest,
+    pkcs12::Pkcs12,
+    pkey::{PKey, Private},
+    rsa::Rsa,
+    stack::Stack,
+    x509::{
+        extension::SubjectAlternativeName,
+        {GeneralNameRef, X509Name, X509NameBuilder, X509NameRef, X509},
+    },
+};
 
-use openssl::asn1::Asn1Time;
-use openssl::bn::{BigNum, MsbOption};
-use openssl::hash::MessageDigest;
-use openssl::pkcs12::Pkcs12;
-use openssl::pkey::{PKey, Private};
-use openssl::rsa::Rsa;
-use openssl::stack::Stack;
-use openssl::x509::extension::SubjectAlternativeName;
-use openssl::x509::{GeneralNameRef, X509Name, X509NameBuilder, X509NameRef, X509};
+use super::error::Error;
 
-use crate::third_wheel::error::Error;
+use log::debug;
 
 /// A certificate authority to use for impersonating websites during the
 /// man-in-the-middle. The client must trust the given certificate for it to

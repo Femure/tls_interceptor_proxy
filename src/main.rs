@@ -1,9 +1,14 @@
+use argh::FromArgs;
 use chrono::Local;
+use cookie::Cookie;
 use core::net::SocketAddr;
 use futures_util::stream;
-use hyper::header::{CONTENT_TYPE, COOKIE, HOST, LOCATION, SET_COOKIE};
-use hyper::service::Service;
-use hyper::{Body, Request, Response, StatusCode};
+use har::v1_2::{self, Entries, Headers};
+use hyper::{
+    header::{CONTENT_TYPE, COOKIE, HOST, LOCATION, SET_COOKIE},
+    service::Service,
+    Body, Request, Response, StatusCode,
+};
 use serde_json::Value::Null;
 use serde_json::{json, Value};
 use std::fs::File;
@@ -13,22 +18,22 @@ use tokio::join;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use argh::FromArgs;
-use cookie::Cookie;
-use har::v1_2::{self, Entries, Headers};
-
 // Declare the modules that you want to include
 mod third_wheel {
-    pub mod certificates; // if you need to use certificates.rs
-    pub mod error; // if you need to use error.rs
-    pub mod proxy; // if you need to use proxy.rs
+    pub mod certificates;
+    pub mod error;
+    pub mod proxy;
 }
 
 // Import necessary modules and items
-use third_wheel::certificates::CertificateAuthority;
-use third_wheel::error::Error;
-use third_wheel::proxy::mitm::{mitm_layer, ThirdWheel};
-use third_wheel::proxy::MitmProxy;
+use third_wheel::{
+    certificates::CertificateAuthority,
+    error::Error,
+    proxy::{
+        mitm::{mitm_layer, ThirdWheel},
+        MitmProxy,
+    },
+};
 
 /// Run a TLS mitm proxy that records a HTTP ARchive (HAR) file of the session.
 /// Currently this is a proof-of-concept and won't handle binary data or non-utf8 encodings
