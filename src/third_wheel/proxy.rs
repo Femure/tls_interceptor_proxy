@@ -10,7 +10,6 @@ use native_tls::Certificate;
 use openssl::x509::X509;
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
@@ -39,16 +38,10 @@ pub mod mitm;
 // either we should replace this with a private function on MitmProxy, or we should do *something else*
 macro_rules! make_service {
     ($this:ident) => {{
-        let ca = Arc::new($this.ca);
-        let mitm = $this.mitm_layer;
-        let additional_host_mapping = $this.additional_host_mappings;
-        let additional_root_certificates = $this.additional_root_certificates;
+        let mitm_proxy = $this.clone();
         make_service_fn(move |conn: &AddrStream| {
             let client_ip = conn.remote_addr();
-            let ca = ca.clone();
-            let mitm = mitm.clone();
-            let additional_host_mapping = additional_host_mapping.clone();
-            let additional_root_certificates = additional_root_certificates.clone();
+            let mitm_proxy = mitm_proxy.clone();
 
             async move {
                 Ok::<_, Error>(service_fn(move |mut req: Request<Body>| {
@@ -59,24 +52,12 @@ macro_rules! make_service {
                         let target = target_host_port_from_connect(&req);
                         match target {
                             Ok((host, port)) => {
-                                let ca = ca.clone();
-                                let mitm = mitm.clone();
-                                let additional_host_mapping = additional_host_mapping.clone();
-                                let additional_root_certificates =
-                                    additional_root_certificates.clone();
-
+                                let mitm_proxy = mitm_proxy.clone();
                                 tokio::task::spawn(async move {
                                     match hyper::upgrade::on(&mut req).await {
                                         Ok(upgraded) => {
                                             if let Err(e) = run_mitm_on_connection(
-                                                upgraded,
-                                                ca,
-                                                &host,
-                                                &port,
-                                                mitm,
-                                                additional_host_mapping.clone(),
-                                                additional_root_certificates.clone(),
-                                                client_ip,
+                                                upgraded, mitm_proxy, &host, &port, client_ip,
                                             )
                                             .await
                                             {
@@ -113,6 +94,7 @@ macro_rules! make_service {
 /// By passing in a Mitm layer this can be customized to perform any required
 /// behavior on HYPER requests and responses. Use the `mitm_layer` function to
 /// easily construct services to pass in to this struct.
+#[derive(Clone)]
 pub struct MitmProxy<T, U>
 where
     T: Layer<ThirdWheel, Service = U> + std::marker::Sync + std::marker::Send + 'static + Clone,
@@ -226,12 +208,9 @@ where
 
 async fn run_mitm_on_connection<S, T, U>(
     upgraded: S,
-    ca: Arc<CertificateAuthority>,
+    mitm_proxy: MitmProxy<T, U>,
     host: &str,
     port: &str,
-    mitm_maker: T,
-    additional_host_mapping: HashMap<String, String>,
-    additional_root_certificates: Vec<Certificate>,
     client_ip: SocketAddr, // Accept the client IP here
 ) -> Result<(), Error>
 where
@@ -242,18 +221,18 @@ where
         + std::marker::Send
         + 'static
         + Clone,
-    U::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    U::Error: std::error::Error + Send + Sync + 'static,
     <U as Service<Request<Body>>>::Future: Send,
 {
     let (target_stream, target_certificate) = connect_to_target_with_tls(
         host,
         port,
-        additional_host_mapping,
-        additional_root_certificates,
+        mitm_proxy.additional_host_mappings,
+        mitm_proxy.additional_root_certificates,
     )
     .await?;
-    let certificate = spoof_certificate(&target_certificate, &ca)?;
-    let identity = native_identity(&certificate, &ca.key)?;
+    let certificate = spoof_certificate(&target_certificate, &mitm_proxy.ca)?;
+    let identity = native_identity(&certificate, &mitm_proxy.ca.key)?;
     let client = TlsAcceptor::from(native_tls::TlsAcceptor::new(identity)?);
     let client_stream = client.accept(upgraded).await?;
 
@@ -278,7 +257,7 @@ where
     // Create the service proxy with the sender defined from the previous opened channel
     let third_wheel = ThirdWheel::new(sender, client_ip);
 
-    let mitm_layer = mitm_maker.layer(third_wheel);
+    let mitm_layer = mitm_proxy.mitm_layer.layer(third_wheel);
 
     Http::new()
         .serve_connection(client_stream, mitm_layer)
