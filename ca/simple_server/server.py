@@ -12,5 +12,5 @@ def home():
 
 if __name__ == "__main__":
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(certfile='/home/femure/Desktop/Project/tls_interceptor_proxy/ca/simple_server/localhost.pem', password="third-wheel")
+    context.load_cert_chain(certfile='localhost.pem', password="third-wheel")
     app.run(host='localhost', port=4443, ssl_context=context)
