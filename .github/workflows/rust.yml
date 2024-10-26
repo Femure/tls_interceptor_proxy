@@ -19,7 +19,7 @@ jobs:
       - name: Setup and validate environment
         run: |
           VALIDATION_MESSAGE="Everything worked, your environment is looking good"
-          if ./setup_and_validate_environment.sh | grep -q "$VALIDATION_MESSAGE"; then
+          if ./tls_interceptor_proxy/setup_and_validate_environment.sh | grep -q "$VALIDATION_MESSAGE"; then
             echo "Validation succeeded: $VALIDATION_MESSAGE"
           else
             echo "Validation failed"
@@ -28,6 +28,7 @@ jobs:
 
   clippy_check:
     runs-on: ubuntu-latest
+    needs: setup
     steps:
       - uses: actions/checkout@v4
       - name: Run Clippy
