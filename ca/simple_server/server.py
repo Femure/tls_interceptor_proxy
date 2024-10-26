@@ -1,22 +1,16 @@
-import http.server
+from flask import Flask, make_response
 import ssl
-import time
 
-class RequestHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write("<html><head><title>Environment Test</title></head></html>\n".encode("utf-8"))
-            time.sleep(1)  # Allow time for the response to be sent before closing
+app = Flask(__name__)
 
-server_address = ('localhost', 4443)
+@app.route("/")
+def home():
+    response = make_response("<html><head><title>Environment Test</title></head></html>")
+    response.headers["Content-Type"] = "text/html"
+    response.headers["Connection"] = "close"  # Ensures proper termination
+    return response
 
-context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-context.load_cert_chain(certfile='localhost.pem', password=(lambda: "third-wheel"))
-
-httpd = http.server.HTTPServer(server_address, RequestHandler)
-httpd.socket = context.wrap_socket(httpd.socket, server_hostname='my_test_site.com')
-
-print(f"Serving on https://{server_address[0]}:{server_address[1]}")
-httpd.serve_forever()
+if __name__ == "__main__":
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certfile='/home/femure/Desktop/Project/tls_interceptor_proxy/ca/simple_server/localhost.pem', password="third-wheel")
+    app.run(host='localhost', port=4443, ssl_context=context)

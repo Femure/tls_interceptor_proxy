@@ -2,8 +2,7 @@ use argh::FromArgs;
 use std::fs::File;
 use std::io::Write;
 
-// Import necessary modules and items
-use third_wheel::{
+use tls_interceptor_proxy::third_wheel::{
     certificates::{create_signed_certificate_for_domain, CertificateAuthority},
     error::Error,
 };

@@ -22,10 +22,6 @@ thiserror = "^1.0"
 hyper = { version = "0.14", features = ["full", "client", "server", "http1"] }
 uuid = { version = "1", features = ["v4"] }
 
-[[example]]
-name = "sign_cert_for_site"
-path = "example/sign_cert_for_site.rs"
-
 [lib]
-name = "third_wheel"
-path = "src/third_wheel/lib.rs"
+name = "tls_interceptor_proxy"
+path = "src/lib.rs"

@@ -6,6 +6,7 @@ use hyper::server::Server;
 use hyper::service::Service;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response};
+use log::error;
 use native_tls::Certificate;
 use openssl::x509::X509;
 use std::collections::HashMap;
@@ -13,19 +14,15 @@ use std::net::SocketAddr;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
 use tokio::net::TcpStream;
+use tokio_native_tls::{TlsAcceptor, TlsStream};
 use tower::Layer;
 
-use tokio_native_tls::{TlsAcceptor, TlsStream};
-
-use log::error;
-
+pub mod mitm;
 use super::{
     certificates::{native_identity, spoof_certificate, CertificateAuthority},
     error::Error,
     proxy::mitm::{RequestSendingSynchronizer, ThirdWheel},
 };
-
-pub mod mitm;
 
 // TODO: do this without macro hackery
 // The idea of using of a macro here is borrowed from warp after hitting my head against it for some time.

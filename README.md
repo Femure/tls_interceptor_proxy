@@ -12,10 +12,15 @@ Fait:
 - Améliorer l'enregistrement des données loggées
 - Création d'un Dockfile pour déployer l'application dans un conteneur
 - Ajout des fichiers du crate modifié en local pour garder les modifications lors du déploiement
+- Implémentation des GitHub Actions Linter - Build - Test - Package 
+- Implémentation de certains tests unitaires
+- Modification shell de setup
+- Réorganisation de la modularité du code
 
 A faire: 
 - Rendre le code et le proxy sécurisés
-- Nettoyer le code (supprimer les dépendences inutiles, améliorer la lisibilité du code...)
+- Implémentation des tests unitaires
+- Ajout la GitHub Action pour scanner les vulnérabilités
 
 Problèmes recontrés: 
 - Lorsqu'un utilisateur envoye des infos confidentielles dans une nouvelle conversation Chatgpt

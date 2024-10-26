@@ -1,5 +1,4 @@
-use std::io;
-use std::{fs::File, path::Path};
+use log::debug;
 use openssl::{
     asn1::Asn1Time,
     bn::{BigNum, MsbOption},
@@ -13,10 +12,10 @@ use openssl::{
         {GeneralNameRef, X509Name, X509NameBuilder, X509NameRef, X509},
     },
 };
+use std::io;
+use std::{fs::File, path::Path};
 
 use super::error::Error;
-
-use log::debug;
 
 /// A certificate authority to use for impersonating websites during the
 /// man-in-the-middle. The client must trust the given certificate for it to

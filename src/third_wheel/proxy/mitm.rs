@@ -1,16 +1,14 @@
 use futures::Future;
 use hyper::{client::conn::SendRequest, service::Service, Body};
 use hyper::{header::HeaderName, Request, Response};
+use log::error;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use tokio::sync::{mpsc, oneshot};
 use tower::Layer;
 
-use super::Error;
+use crate::third_wheel::error::Error;
 
-use log::error;
-
-// Alias for complex type used in sender and receiver channels
 type RequestResponsePair = (
     oneshot::Sender<Result<Response<Body>, Error>>,
     Request<Body>,
