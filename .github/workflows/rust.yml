@@ -16,6 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: List files in tls_interceptor_proxy
+        run: ls -la ./tls_interceptor_proxy
       - name: Setup and validate environment
         run: |
           VALIDATION_MESSAGE="Everything worked, your environment is looking good"
