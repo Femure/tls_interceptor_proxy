@@ -23,6 +23,7 @@
 - Rendre le code et le proxy sécurisés.
 - Implémentation des tests unitaires.
 - Ajouter la GitHub Action pour scanner les vulnérabilités.
+- Supprimer les informations confidentielles dans les logs (cookies, tokens, id...)
 ---
 **Problèmes rencontrés :**
 
